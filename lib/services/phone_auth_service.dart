@@ -1,15 +1,23 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 
+class AuthenticatedPhoneUser {
+  const AuthenticatedPhoneUser({required this.uid, required this.phoneNumber});
+
+  final String uid;
+  final String phoneNumber;
+}
+
 abstract interface class PhoneAuthService {
   Future<void> sendCode(
     String phoneNumber, {
     required ValueChanged<String> onCodeSent,
-    required VoidCallback onAutoVerified,
+    required Future<void> Function(AuthenticatedPhoneUser user)
+    onAutoVerified,
     required ValueChanged<String> onError,
   });
 
-  Future<void> verifyCode({
+  Future<AuthenticatedPhoneUser> verifyCode({
     required String verificationId,
     required String smsCode,
   });
@@ -26,7 +34,8 @@ class FirebasePhoneAuthService implements PhoneAuthService {
   Future<void> sendCode(
     String phoneNumber, {
     required ValueChanged<String> onCodeSent,
-    required VoidCallback onAutoVerified,
+    required Future<void> Function(AuthenticatedPhoneUser user)
+    onAutoVerified,
     required ValueChanged<String> onError,
   }) {
     return _auth.verifyPhoneNumber(
@@ -35,8 +44,17 @@ class FirebasePhoneAuthService implements PhoneAuthService {
       forceResendingToken: _resendToken,
       verificationCompleted: (credential) async {
         try {
-          await _auth.signInWithCredential(credential);
-          onAutoVerified();
+          final result = await _auth.signInWithCredential(credential);
+          final user = result.user;
+          if (user == null) {
+            throw StateError('Firebase no devolvió el usuario autenticado.');
+          }
+          await onAutoVerified(
+            AuthenticatedPhoneUser(
+              uid: user.uid,
+              phoneNumber: user.phoneNumber ?? phoneNumber,
+            ),
+          );
         } on FirebaseAuthException catch (error) {
           onError(_messageFor(error));
         } catch (error) {
@@ -53,15 +71,23 @@ class FirebasePhoneAuthService implements PhoneAuthService {
   }
 
   @override
-  Future<void> verifyCode({
+  Future<AuthenticatedPhoneUser> verifyCode({
     required String verificationId,
     required String smsCode,
   }) async {
-    await _auth.signInWithCredential(
+    final result = await _auth.signInWithCredential(
       PhoneAuthProvider.credential(
         verificationId: verificationId,
         smsCode: smsCode,
       ),
+    );
+    final user = result.user;
+    if (user == null) {
+      throw StateError('Firebase no devolvió el usuario autenticado.');
+    }
+    return AuthenticatedPhoneUser(
+      uid: user.uid,
+      phoneNumber: user.phoneNumber ?? '',
     );
   }
 

@@ -1,19 +1,24 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_core/firebase_core.dart';
 
 import 'services/phone_auth_service.dart';
+import 'services/user_profile_service.dart';
 import 'screens/rastros_screens.dart';
 
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
+void main() {
   runApp(const RastrosApp());
 }
 
 class RastrosApp extends StatelessWidget {
-  const RastrosApp({super.key, this.authService});
+  const RastrosApp({
+    super.key,
+    this.authService,
+    this.profileService,
+    this.enablePhoneAuth = false,
+  });
 
   final PhoneAuthService? authService;
+  final UserProfileService? profileService;
+  final bool enablePhoneAuth;
 
   @override
   Widget build(BuildContext context) {
@@ -33,7 +38,11 @@ class RastrosApp extends StatelessWidget {
           bodyMedium: TextStyle(color: RastrosColors.navy),
         ),
       ),
-      home: LoginScreen(authService: authService),
+      home: LoginScreen(
+        authService: authService,
+        profileService: profileService,
+        enablePhoneAuth: enablePhoneAuth,
+      ),
     );
   }
 }

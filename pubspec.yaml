@@ -63,6 +63,7 @@ dependencies:
   connectivity_plus: ^6.1.4
   flutter_local_notifications: ^18.0.1
   timeago: ^3.7.0
+  geoflutterfire_plus: ^0.0.32
 
 dev_dependencies:
   flutter_test:
