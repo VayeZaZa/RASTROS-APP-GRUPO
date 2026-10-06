@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../services/phone_auth_service.dart';
+import '../services/user_profile_service.dart';
 
 abstract final class RastrosColors {
   static const cream = Color(0xFFFCF8EF);
@@ -16,9 +17,16 @@ abstract final class RastrosColors {
 }
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key, this.authService});
+  const LoginScreen({
+    super.key,
+    this.authService,
+    this.profileService,
+    this.enablePhoneAuth = false,
+  });
 
   final PhoneAuthService? authService;
+  final UserProfileService? profileService;
+  final bool enablePhoneAuth;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -29,6 +37,8 @@ class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   late final PhoneAuthService _authService =
       widget.authService ?? FirebasePhoneAuthService();
+  late final UserProfileService _profileService =
+      widget.profileService ?? FirestoreUserProfileService();
   bool _sendingCode = false;
   bool _verificationFinished = false;
   String? _message;
@@ -39,6 +49,19 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
+  void _openTesterMode() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const OtpScreen(
+          phoneNumber: '',
+          verificationId: '',
+          enablePhoneAuth: false,
+          testerMode: true,
+        ),
+      ),
+    );
+  }
+
   String _phoneNumberWithCountryCode(String input) {
     final digits = input.replaceAll(RegExp(r'\D'), '');
     if (input.trimLeft().startsWith('+')) return '+$digits';
@@ -47,6 +70,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _continue() async {
+    if (!widget.enablePhoneAuth) return;
     if (!_formKey.currentState!.validate()) return;
     setState(() {
       _sendingCode = true;
@@ -65,17 +89,32 @@ class _LoginScreenState extends State<LoginScreen> {
                 phoneNumber: _phoneNumberWithCountryCode(_phoneController.text),
                 verificationId: verificationId,
                 authService: _authService,
+                profileService: _profileService,
+                enablePhoneAuth: widget.enablePhoneAuth,
               ),
             ),
           );
         },
-        onAutoVerified: () {
+        onAutoVerified: (user) async {
           if (!mounted) return;
           _verificationFinished = true;
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute<void>(builder: (_) => const HomeScreen()),
-            (_) => false,
-          );
+          try {
+            await _profileService.ensureProfile(
+              uid: user.uid,
+              phoneNumber: user.phoneNumber,
+            );
+            if (!mounted) return;
+            Navigator.of(context).pushAndRemoveUntil(
+              MaterialPageRoute<void>(builder: (_) => const HomeScreen()),
+              (_) => false,
+            );
+          } catch (error) {
+            if (!mounted) return;
+            setState(() {
+              _sendingCode = false;
+              _message = 'No se pudo guardar tu perfil en Firestore: $error';
+            });
+          }
         },
         onError: (message) {
           if (!mounted) return;
@@ -204,6 +243,29 @@ class _LoginScreenState extends State<LoginScreen> {
                         color: RastrosColors.blue,
                         onPressed: _sendingCode ? () {} : _continue,
                       ),
+                      if (!widget.enablePhoneAuth) ...[
+                        const SizedBox(height: 17),
+                        SizedBox(
+                          width: double.infinity,
+                          height: 50,
+                          child: FilledButton.icon(
+                          key: const Key('tester-mode-button'),
+                          onPressed: _sendingCode ? () {} : _openTesterMode,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: RastrosColors.yellow,
+                            foregroundColor: RastrosColors.navy,
+                            elevation: 1,
+                            shape: const StadiumBorder(),
+                            textStyle: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          icon: const Icon(Icons.pets_rounded, size: 19),
+                          label: const Text('Continuar como modo tester'),
+                          ),
+                        ),
+                      ],
                       if (_message != null) ...[
                         const SizedBox(height: 9),
                         Text(
@@ -244,12 +306,18 @@ class OtpScreen extends StatefulWidget {
     super.key,
     required this.phoneNumber,
     required this.verificationId,
-    required this.authService,
+    this.authService,
+    this.profileService,
+    this.enablePhoneAuth = false,
+    this.testerMode = false,
   });
 
   final String phoneNumber;
   final String verificationId;
-  final PhoneAuthService authService;
+  final PhoneAuthService? authService;
+  final UserProfileService? profileService;
+  final bool enablePhoneAuth;
+  final bool testerMode;
 
   @override
   State<OtpScreen> createState() => _OtpScreenState();
@@ -279,6 +347,21 @@ class _OtpScreenState extends State<OtpScreen> {
   }
 
   Future<void> _verify() async {
+    if (widget.testerMode) {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute<void>(
+          builder: (_) => const HomeScreen(),
+        ),
+        (_) => false,
+      );
+      return;
+    }
+
+    if (!widget.enablePhoneAuth) {
+      setState(() => _message = 'El envío real de SMS está desactivado.');
+      return;
+    }
+
     final code = _controllers.map((controller) => controller.text).join();
     if (code.length != _digitCount) {
       setState(() => _message = 'Ingresa los 6 dígitos para continuar.');
@@ -289,9 +372,16 @@ class _OtpScreenState extends State<OtpScreen> {
       _message = null;
     });
     try {
-      await widget.authService.verifyCode(
+      final authService = widget.authService ?? FirebasePhoneAuthService();
+      final profileService =
+          widget.profileService ?? FirestoreUserProfileService();
+      final user = await authService.verifyCode(
         verificationId: _verificationId,
         smsCode: code,
+      );
+      await profileService.ensureProfile(
+        uid: user.uid,
+        phoneNumber: user.phoneNumber,
       );
       if (!mounted) return;
       Navigator.of(context).pushAndRemoveUntil(
@@ -302,18 +392,24 @@ class _OtpScreenState extends State<OtpScreen> {
       if (!mounted) return;
       setState(() {
         _verifying = false;
-        _message = 'No se pudo verificar el código: $error';
+        _message = 'No se pudo verificar el código o guardar tu perfil: $error';
       });
     }
   }
 
   Future<void> _resendCode() async {
+    if (!widget.enablePhoneAuth) {
+      setState(() => _message = 'El reenvío de SMS está desactivado.');
+      return;
+    }
+
     setState(() {
       _resending = true;
       _message = null;
     });
     try {
-      await widget.authService.sendCode(
+      final authService = widget.authService ?? FirebasePhoneAuthService();
+      await authService.sendCode(
         widget.phoneNumber,
         onCodeSent: (verificationId) {
           if (!mounted) return;
@@ -327,12 +423,29 @@ class _OtpScreenState extends State<OtpScreen> {
           }
           _focusNodes.first.requestFocus();
         },
-        onAutoVerified: () {
+        onAutoVerified: (user) async {
           if (!mounted) return;
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute<void>(builder: (_) => const HomeScreen()),
-            (_) => false,
-          );
+          try {
+            final profileService =
+                widget.profileService ?? FirestoreUserProfileService();
+            await profileService.ensureProfile(
+              uid: user.uid,
+              phoneNumber: user.phoneNumber,
+            );
+            if (!mounted) return;
+            Navigator.of(context).pushAndRemoveUntil(
+              MaterialPageRoute<void>(
+                builder: (_) => const HomeScreen(),
+              ),
+              (_) => false,
+            );
+          } catch (error) {
+            if (!mounted) return;
+            setState(() {
+              _resending = false;
+              _message = 'No se pudo guardar tu perfil en Firestore: $error';
+            });
+          }
         },
         onError: (message) {
           if (!mounted) return;
@@ -356,13 +469,17 @@ class _OtpScreenState extends State<OtpScreen> {
     return Scaffold(
       body: AuthBackdrop(
         child: SafeArea(
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 430),
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(24, 14, 24, 18),
-                child: Column(
-                  children: [
+          child: LayoutBuilder(
+            builder: (context, constraints) => Stack(
+              alignment: Alignment.topCenter,
+              children: [
+                Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 430),
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(24, 14, 24, 250),
+                      child: Column(
+                        children: [
                     Align(
                       alignment: Alignment.centerLeft,
                       child: IconButton(
@@ -388,6 +505,7 @@ class _OtpScreenState extends State<OtpScreen> {
                       ),
                     ),
                     const SizedBox(height: 5),
+                    if (widget.phoneNumber.isNotEmpty)
                     Text(
                       widget.phoneNumber,
                       style: const TextStyle(
@@ -472,46 +590,59 @@ class _OtpScreenState extends State<OtpScreen> {
                       key: const Key('verify-code-button'),
                       label: _verifying
                           ? 'Verificando...'
+                          : widget.testerMode
+                          ? 'Continuar'
                           : 'Verificar e ingresar',
                       color: RastrosColors.teal,
                       onPressed: _verifying ? () {} : _verify,
                     ),
-                    const SizedBox(height: 18),
-                    const Text(
-                      '¿No recibiste el código?',
-                      style: TextStyle(color: RastrosColors.navy, fontSize: 12),
-                    ),
-                    TextButton(
-                      onPressed: _resending || _verifying
-                          ? null
-                          : _resendCode,
-                      style: TextButton.styleFrom(
-                        foregroundColor: RastrosColors.navy,
-                        padding: const EdgeInsets.symmetric(vertical: 3),
-                        textStyle: const TextStyle(
+                    if (!widget.testerMode) ...[
+                      const SizedBox(height: 18),
+                      const Text(
+                        '¿No recibiste el código?',
+                        style: TextStyle(
+                          color: RastrosColors.navy,
                           fontSize: 12,
-                          decoration: TextDecoration.underline,
                         ),
                       ),
-                      child: Text(
-                        _resending ? 'Enviando...' : 'Reenviar código',
+                      TextButton(
+                        onPressed: _resending || _verifying
+                            ? null
+                            : _resendCode,
+                        style: TextButton.styleFrom(
+                          foregroundColor: RastrosColors.navy,
+                          padding: const EdgeInsets.symmetric(vertical: 3),
+                          textStyle: const TextStyle(
+                            fontSize: 12,
+                            decoration: TextDecoration.underline,
+                          ),
+                        ),
+                        child: Text(
+                          _resending ? 'Enviando...' : 'Reenviar código',
+                        ),
+                      ),
+                    ],
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 20),
-                    SizedBox(
-                      height: 184,
-                      width: double.infinity,
-                      child: Image.asset(
-                        key: const Key('otp-cat-art'),
-                        'Assets/Foto OTP.png',
-                        fit: BoxFit.contain,
-                        alignment: Alignment.bottomCenter,
-                        semanticLabel: 'Gatito de Rastros',
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
-              ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: SizedBox(
+                    height: constraints.maxHeight * 0.34,
+                    child: Image.asset(
+                      key: const Key('otp-cat-art'),
+                      'Assets/Foto OTP.png',
+                      fit: BoxFit.contain,
+                      alignment: Alignment.bottomCenter,
+                      semanticLabel: 'Gatito de Rastros',
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
