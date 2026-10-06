@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../services/phone_auth_service.dart';
+import '../services/user_profile_service.dart';
 
 abstract final class RastrosColors {
   static const cream = Color(0xFFFCF8EF);
@@ -16,9 +17,14 @@ abstract final class RastrosColors {
 }
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key, this.authService});
+  const LoginScreen({
+    super.key,
+    this.authService,
+    this.profileService,
+  });
 
   final PhoneAuthService? authService;
+  final UserProfileService? profileService;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -29,6 +35,8 @@ class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   late final PhoneAuthService _authService =
       widget.authService ?? FirebasePhoneAuthService();
+  late final UserProfileService _profileService =
+      widget.profileService ?? FirestoreUserProfileService();
   bool _sendingCode = false;
   bool _verificationFinished = false;
   String? _message;
@@ -65,17 +73,31 @@ class _LoginScreenState extends State<LoginScreen> {
                 phoneNumber: _phoneNumberWithCountryCode(_phoneController.text),
                 verificationId: verificationId,
                 authService: _authService,
+                profileService: _profileService,
               ),
             ),
           );
         },
-        onAutoVerified: () {
+        onAutoVerified: (user) async {
           if (!mounted) return;
           _verificationFinished = true;
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute<void>(builder: (_) => const HomeScreen()),
-            (_) => false,
-          );
+          try {
+            await _profileService.ensureProfile(
+              uid: user.uid,
+              phoneNumber: user.phoneNumber,
+            );
+            if (!mounted) return;
+            Navigator.of(context).pushAndRemoveUntil(
+              MaterialPageRoute<void>(builder: (_) => const HomeScreen()),
+              (_) => false,
+            );
+          } catch (error) {
+            if (!mounted) return;
+            setState(() {
+              _sendingCode = false;
+              _message = 'No se pudo guardar tu perfil en Firestore: $error';
+            });
+          }
         },
         onError: (message) {
           if (!mounted) return;
@@ -116,8 +138,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           key: const Key('login-pets-art'),
                           'Assets/Foto login.png',
                           fit: BoxFit.contain,
-                          semanticLabel:
-                              'Logo Rastros con un perro y un gato',
+                          semanticLabel: 'Logo Rastros con un perro y un gato',
                         ),
                       ),
                       const SizedBox(height: 8),
@@ -244,12 +265,14 @@ class OtpScreen extends StatefulWidget {
     super.key,
     required this.phoneNumber,
     required this.verificationId,
-    required this.authService,
+    this.authService,
+    this.profileService,
   });
 
   final String phoneNumber;
   final String verificationId;
-  final PhoneAuthService authService;
+  final PhoneAuthService? authService;
+  final UserProfileService? profileService;
 
   @override
   State<OtpScreen> createState() => _OtpScreenState();
@@ -289,9 +312,16 @@ class _OtpScreenState extends State<OtpScreen> {
       _message = null;
     });
     try {
-      await widget.authService.verifyCode(
+      final authService = widget.authService ?? FirebasePhoneAuthService();
+      final profileService =
+          widget.profileService ?? FirestoreUserProfileService();
+      final user = await authService.verifyCode(
         verificationId: _verificationId,
         smsCode: code,
+      );
+      await profileService.ensureProfile(
+        uid: user.uid,
+        phoneNumber: user.phoneNumber,
       );
       if (!mounted) return;
       Navigator.of(context).pushAndRemoveUntil(
@@ -302,7 +332,7 @@ class _OtpScreenState extends State<OtpScreen> {
       if (!mounted) return;
       setState(() {
         _verifying = false;
-        _message = 'No se pudo verificar el código: $error';
+        _message = 'No se pudo verificar el código o guardar tu perfil: $error';
       });
     }
   }
@@ -313,7 +343,8 @@ class _OtpScreenState extends State<OtpScreen> {
       _message = null;
     });
     try {
-      await widget.authService.sendCode(
+      final authService = widget.authService ?? FirebasePhoneAuthService();
+      await authService.sendCode(
         widget.phoneNumber,
         onCodeSent: (verificationId) {
           if (!mounted) return;
@@ -327,12 +358,27 @@ class _OtpScreenState extends State<OtpScreen> {
           }
           _focusNodes.first.requestFocus();
         },
-        onAutoVerified: () {
+        onAutoVerified: (user) async {
           if (!mounted) return;
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute<void>(builder: (_) => const HomeScreen()),
-            (_) => false,
-          );
+          try {
+            final profileService =
+                widget.profileService ?? FirestoreUserProfileService();
+            await profileService.ensureProfile(
+              uid: user.uid,
+              phoneNumber: user.phoneNumber,
+            );
+            if (!mounted) return;
+            Navigator.of(context).pushAndRemoveUntil(
+              MaterialPageRoute<void>(builder: (_) => const HomeScreen()),
+              (_) => false,
+            );
+          } catch (error) {
+            if (!mounted) return;
+            setState(() {
+              _resending = false;
+              _message = 'No se pudo guardar tu perfil en Firestore: $error';
+            });
+          }
         },
         onError: (message) {
           if (!mounted) return;
@@ -356,162 +402,181 @@ class _OtpScreenState extends State<OtpScreen> {
     return Scaffold(
       body: AuthBackdrop(
         child: SafeArea(
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 430),
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(24, 14, 24, 18),
-                child: Column(
-                  children: [
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: IconButton(
-                        tooltip: 'Volver',
-                        onPressed: () => Navigator.of(context).pop(),
-                        icon: const Icon(
-                          Icons.arrow_back_rounded,
-                          color: RastrosColors.navy,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    const BrandLogo(size: 48),
-                    const SizedBox(height: 19),
-                    const Text(
-                      'Ingresa el código de 6 dígitos\nenviado a tu celular',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: RastrosColors.navy,
-                        fontSize: 17,
-                        height: 1.35,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 5),
-                    Text(
-                      widget.phoneNumber,
-                      style: const TextStyle(
-                        color: RastrosColors.muted,
-                        fontSize: 13,
-                      ),
-                    ),
-                    const SizedBox(height: 22),
-                    Row(
-                      children: List.generate(
-                        _digitCount,
-                        (index) => Expanded(
-                          child: Padding(
-                            padding: EdgeInsets.only(
-                              right: index == _digitCount - 1 ? 0 : 6,
+          child: LayoutBuilder(
+            builder: (context, constraints) => Stack(
+              alignment: Alignment.topCenter,
+              children: [
+                Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 430),
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(24, 14, 24, 250),
+                      child: Column(
+                        children: [
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: IconButton(
+                              tooltip: 'Volver',
+                              onPressed: () => Navigator.of(context).pop(),
+                              icon: const Icon(
+                                Icons.arrow_back_rounded,
+                                color: RastrosColors.navy,
+                              ),
                             ),
-                            child: TextField(
-                              key: Key('otp-digit-$index'),
-                              controller: _controllers[index],
-                              focusNode: _focusNodes[index],
-                              keyboardType: TextInputType.number,
-                              textAlign: TextAlign.center,
-                              maxLength: 1,
-                              inputFormatters: [
-                                FilteringTextInputFormatter.digitsOnly,
-                              ],
-                              onChanged: (value) {
-                                setState(() => _message = null);
-                                if (value.isNotEmpty &&
-                                    index < _digitCount - 1) {
-                                  _focusNodes[index + 1].requestFocus();
-                                } else if (value.isEmpty && index > 0) {
-                                  _focusNodes[index - 1].requestFocus();
-                                }
-                              },
-                              decoration: InputDecoration(
-                                counterText: '',
-                                filled: true,
-                                fillColor: Colors.white.withValues(alpha: 0.55),
-                                contentPadding: const EdgeInsets.symmetric(
-                                  vertical: 14,
-                                ),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(13),
-                                  borderSide: const BorderSide(
-                                    color: RastrosColors.line,
+                          ),
+                          const SizedBox(height: 2),
+                          const BrandLogo(size: 48),
+                          const SizedBox(height: 19),
+                          const Text(
+                            'Ingresa el código de 6 dígitos\nenviado a tu celular',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: RastrosColors.navy,
+                              fontSize: 17,
+                              height: 1.35,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 5),
+                          if (widget.phoneNumber.isNotEmpty)
+                            Text(
+                              widget.phoneNumber,
+                              style: const TextStyle(
+                                color: RastrosColors.muted,
+                                fontSize: 13,
+                              ),
+                            ),
+                          const SizedBox(height: 22),
+                          Row(
+                            children: List.generate(
+                              _digitCount,
+                              (index) => Expanded(
+                                child: Padding(
+                                  padding: EdgeInsets.only(
+                                    right: index == _digitCount - 1 ? 0 : 6,
                                   ),
-                                ),
-                                enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(13),
-                                  borderSide: const BorderSide(
-                                    color: RastrosColors.line,
-                                    width: 1.3,
-                                  ),
-                                ),
-                                focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(13),
-                                  borderSide: const BorderSide(
-                                    color: RastrosColors.blue,
-                                    width: 1.7,
+                                  child: TextField(
+                                    key: Key('otp-digit-$index'),
+                                    controller: _controllers[index],
+                                    focusNode: _focusNodes[index],
+                                    keyboardType: TextInputType.number,
+                                    textAlign: TextAlign.center,
+                                    maxLength: 1,
+                                    inputFormatters: [
+                                      FilteringTextInputFormatter.digitsOnly,
+                                    ],
+                                    onChanged: (value) {
+                                      setState(() => _message = null);
+                                      if (value.isNotEmpty &&
+                                          index < _digitCount - 1) {
+                                        _focusNodes[index + 1].requestFocus();
+                                      } else if (value.isEmpty && index > 0) {
+                                        _focusNodes[index - 1].requestFocus();
+                                      }
+                                    },
+                                    decoration: InputDecoration(
+                                      counterText: '',
+                                      filled: true,
+                                      fillColor: Colors.white.withValues(
+                                        alpha: 0.55,
+                                      ),
+                                      contentPadding:
+                                          const EdgeInsets.symmetric(
+                                            vertical: 14,
+                                          ),
+                                      border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(13),
+                                        borderSide: const BorderSide(
+                                          color: RastrosColors.line,
+                                        ),
+                                      ),
+                                      enabledBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(13),
+                                        borderSide: const BorderSide(
+                                          color: RastrosColors.line,
+                                          width: 1.3,
+                                        ),
+                                      ),
+                                      focusedBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(13),
+                                        borderSide: const BorderSide(
+                                          color: RastrosColors.blue,
+                                          width: 1.7,
+                                        ),
+                                      ),
+                                    ),
                                   ),
                                 ),
                               ),
                             ),
                           ),
-                        ),
+                          if (_message != null) ...[
+                            const SizedBox(height: 9),
+                            Text(
+                              _message!,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                color: RastrosColors.navy,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 18),
+                          PrimaryButton(
+                            key: const Key('verify-code-button'),
+                            label: _verifying
+                                ? 'Verificando...'
+                                : 'Verificar e ingresar',
+                            color: RastrosColors.teal,
+                            onPressed: _verifying ? () {} : _verify,
+                          ),
+                          const SizedBox(height: 18),
+                          const Text(
+                            '¿No recibiste el código?',
+                            style: TextStyle(
+                              color: RastrosColors.navy,
+                              fontSize: 12,
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: _resending || _verifying
+                                ? null
+                                : _resendCode,
+                            style: TextButton.styleFrom(
+                              foregroundColor: RastrosColors.navy,
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 3,
+                              ),
+                              textStyle: const TextStyle(
+                                fontSize: 12,
+                                decoration: TextDecoration.underline,
+                              ),
+                            ),
+                            child: Text(
+                              _resending ? 'Enviando...' : 'Reenviar código',
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    if (_message != null) ...[
-                      const SizedBox(height: 9),
-                      Text(
-                        _message!,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: RastrosColors.navy,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 18),
-                    PrimaryButton(
-                      key: const Key('verify-code-button'),
-                      label: _verifying
-                          ? 'Verificando...'
-                          : 'Verificar e ingresar',
-                      color: RastrosColors.teal,
-                      onPressed: _verifying ? () {} : _verify,
-                    ),
-                    const SizedBox(height: 18),
-                    const Text(
-                      '¿No recibiste el código?',
-                      style: TextStyle(color: RastrosColors.navy, fontSize: 12),
-                    ),
-                    TextButton(
-                      onPressed: _resending || _verifying
-                          ? null
-                          : _resendCode,
-                      style: TextButton.styleFrom(
-                        foregroundColor: RastrosColors.navy,
-                        padding: const EdgeInsets.symmetric(vertical: 3),
-                        textStyle: const TextStyle(
-                          fontSize: 12,
-                          decoration: TextDecoration.underline,
-                        ),
-                      ),
-                      child: Text(
-                        _resending ? 'Enviando...' : 'Reenviar código',
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    SizedBox(
-                      height: 184,
-                      width: double.infinity,
-                      child: Image.asset(
-                        key: const Key('otp-cat-art'),
-                        'Assets/Foto OTP.png',
-                        fit: BoxFit.contain,
-                        alignment: Alignment.bottomCenter,
-                        semanticLabel: 'Gatito de Rastros',
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
-              ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: SizedBox(
+                    height: constraints.maxHeight * 0.34,
+                    child: Image.asset(
+                      key: const Key('otp-cat-art'),
+                      'Assets/Foto OTP.png',
+                      fit: BoxFit.contain,
+                      alignment: Alignment.bottomCenter,
+                      semanticLabel: 'Gatito de Rastros',
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
