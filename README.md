@@ -15,7 +15,6 @@ Las imágenes de la carpeta `Assets/` están registradas en `pubspec.yaml`: `Fot
 Esta rama es solo para trabajar en la interfaz. El inicio muestra un botón **Continuar como modo tester**; desde allí se puede avanzar por OTP e Inicio sin ingresar un código.
 
 La aplicación de esta rama no inicializa Firebase. El acceso telefónico, el envío de SMS y el guardado de perfiles no están disponibles aquí.
-Para configurar Firebase Authentication y Firestore, usa la rama funcional y sus instrucciones de integración.
 
 ## Ejecutar
 
