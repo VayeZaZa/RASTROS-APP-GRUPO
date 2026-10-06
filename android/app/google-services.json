@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "964704334623",
+    "project_id": "rastros-app-cf11f",
+    "storage_bucket": "rastros-app-cf11f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:964704334623:android:40107f2f90e453a213362a",
+        "android_client_info": {
+          "package_name": "com.usc.rastros_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDHmDYJm7984Ds2OBF5J-tGl_BTzc1BUas"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
